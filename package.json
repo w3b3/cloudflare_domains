@@ -1,5 +1,6 @@
 {
   "name": "cloudflare_domains",
+  "type": "module",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -11,6 +12,11 @@
   "description": "",
   "dependencies": {
     "axios": "^1.8.4",
-    "dotenv": "^16.5.0"
+    "better-sqlite3": "^11.9.1",
+    "bootstrap": "^5.3.0",
+    "chart.js": "^4.4.9",
+    "dotenv": "^16.5.0",
+    "fs-extra": "^11.3.0",
+    "sqlite3": "^5.1.7"
   }
 }
