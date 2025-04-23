@@ -13,7 +13,6 @@
 **/logs
 **/temp
 
-*.html
 *.db
 *.png
 *.jpg
