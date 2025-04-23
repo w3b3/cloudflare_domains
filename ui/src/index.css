@@ -49,12 +49,29 @@ body {
 
 .clickable {
   cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.clickable:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
 }
 
 .screenshot-container {
-  border-radius: 5px;
+  height: 0;
+  padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+  position: relative;
   overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background-color: #f5f5f5;
+}
+
+.screenshot-container img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .placeholder {
@@ -63,4 +80,96 @@ body {
   background-color: #f0f0f0;
   border-radius: 5px;
   color: #666;
+}
+
+/* Ensure the cards have nice rounded corners and keep aspect ratio */
+.card {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Tag filtering styles */
+.tag-filter-container {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background-color: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  animation: fadeIn 0.3s ease;
+}
+
+.tag-filter-title {
+  font-size: 1rem;
+  font-weight: 500;
+  margin-bottom: 10px;
+  color: #495057;
+}
+
+.tag-filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-button {
+  transition: all 0.2s ease;
+  border-radius: 20px;
+  padding: 6px 14px;
+}
+
+.tag-button:hover {
+  transform: translateY(-2px);
+}
+
+.active-tag {
+  font-weight: 500;
+}
+
+/* Card styles for tags */
+.card-tag {
+  border-radius: 20px;
+  font-size: 0.8em;
+  padding: 5px 10px;
+}
+
+/* Filter toggle button */
+.filter-toggle-btn {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background-color: #f8f9fa;
+  color: #495057;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.75rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.filter-toggle-btn:hover {
+  background-color: #e9ecef;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+}
+
+.filter-toggle-btn i {
+  font-size: 0.8rem;
+}
+
+/* Make the badge align better with text */
+.filter-toggle-btn .badge {
+  vertical-align: middle;
+  font-weight: 500;
+  font-size: 0.75rem;
+  padding: 0.25em 0.6em;
+}
+
+/* Animation for filter panel */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 } 

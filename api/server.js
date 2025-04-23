@@ -21,7 +21,7 @@ const CACHE_EXPIRATION_HOURS = 24;
 
 // Database setup
 const DB_PATH = path.join(__dirname, '../cloudflare_cache.db');
-const SCREENSHOTS_DIR = path.join(__dirname, '../screenshots');
+const SCREENSHOTS_DIR = path.join(__dirname, 'screenshots');
 
 // Ensure screenshots directory exists
 if (!fs.existsSync(SCREENSHOTS_DIR)) {
@@ -77,6 +77,21 @@ function initDatabase() {
             completed_at INTEGER
         )
     `);
+    
+    // Check if tag column exists in zone_metadata, add it if not
+    try {
+        // Check if the tag column exists using a pragma query
+        const columns = database.prepare('PRAGMA table_info(zone_metadata)').all();
+        const tagColumnExists = columns.some(column => column.name === 'tag');
+        
+        if (!tagColumnExists) {
+            console.log('Adding missing tag column to zone_metadata table...');
+            database.exec('ALTER TABLE zone_metadata ADD COLUMN tag TEXT');
+            console.log('Tag column added successfully.');
+        }
+    } catch (error) {
+        console.error('Error checking or adding tag column:', error);
+    }
     
     return database;
 }
@@ -286,9 +301,11 @@ async function takeScreenshot(zoneName) {
         // Update the database with the screenshot path
         updateZoneScreenshot(zoneName, screenshotPath);
         
+        // Return a path that works with the client-side URL structure
+        const filename = path.basename(screenshotPath);
         return {
             success: true,
-            path: `/screenshots/${zoneName}.png`,
+            path: `/screenshots/${filename}`,
             message: 'Screenshot taken successfully'
         };
     } catch (error) {
@@ -313,6 +330,7 @@ function updateZoneScreenshot(zoneName, screenshotPath) {
     }
     
     const zoneId = zone.id;
+    // Store the screenshot path relative to the API screenshots directory
     const relativePath = path.basename(screenshotPath);
     
     // Check if metadata exists for this zone

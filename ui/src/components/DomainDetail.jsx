@@ -356,16 +356,22 @@ const DomainDetail = () => {
                   <Spinner animation="border" />
                   <p className="mt-2">Taking screenshot...</p>
                 </div>
-              ) : metadata.screenshot_path ? (
+              ) : metadata.screenshot_path && metadata.screenshot_path.trim() !== '' ? (
                 <div className="screenshot-container mb-3">
-                  <img 
-                    src={`/screenshots/${metadata.screenshot_path}`}
-                    alt={`Screenshot of ${domainName}`}
-                    className="img-fluid rounded"
-                  />
-                  <small className="d-block text-muted mt-1 text-end">
-                    Click to view full size
-                  </small>
+                  <a 
+                    href={`/screenshots/${metadata.screenshot_path}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                  >
+                    <img 
+                      src={`/screenshots/${metadata.screenshot_path}`}
+                      alt={`Screenshot of ${domainName}`}
+                      className="img-fluid rounded"
+                    />
+                    <small className="d-block text-muted mt-1 text-end">
+                      Click to view full size
+                    </small>
+                  </a>
                 </div>
               ) : (
                 <div className="placeholder mb-3">
