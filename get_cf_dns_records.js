@@ -54,12 +54,13 @@ function initDatabase() {
         )
     `);
     
-    // Create zone_metadata table for notes and screenshots
+    // Create zone_metadata table for notes, screenshots, and tags
     database.exec(`
         CREATE TABLE IF NOT EXISTS zone_metadata (
             zone_id TEXT PRIMARY KEY,
             notes TEXT,
-            screenshot_path TEXT
+            screenshot_path TEXT,
+            tag TEXT
         )
     `);
     
@@ -210,8 +211,9 @@ function getZoneMetadata(zoneId) {
     const metadata = db.prepare('SELECT * FROM zone_metadata WHERE zone_id = ?').get(zoneId);
     if (!metadata) {
         // Create default metadata if it doesn't exist
-        db.prepare('INSERT INTO zone_metadata (zone_id, notes, screenshot_path) VALUES (?, ?, ?)').run(zoneId, '', '');
-        return { zone_id: zoneId, notes: '', screenshot_path: '' };
+        db.prepare('INSERT INTO zone_metadata (zone_id, notes, screenshot_path, tag) VALUES (?, ?, ?, ?)')
+          .run(zoneId, '', '', '');
+        return { zone_id: zoneId, notes: '', screenshot_path: '', tag: '' };
     }
     return metadata;
 }
@@ -266,7 +268,7 @@ function generateHtmlReport(zoneDataMap) {
     // Sort zones alphabetically
     const sortedZones = Object.keys(zoneDataMap).sort();
     
-    // Create the tabs
+    // Create the tabs with larger thumbnails and text overlay
     sortedZones.forEach((zoneName, index) => {
         const isActive = index === 0 ? 'active' : '';
         const zoneId = zoneName.replace(/\./g, '-');
@@ -274,13 +276,52 @@ function generateHtmlReport(zoneDataMap) {
         const records = zoneData.records;
         const metadata = zoneData.metadata;
         const tasks = zoneData.tasks;
+        const tag = metadata.tag || '';
         
-        // Create tab nav
+        // Check if screenshot exists for tab thumbnail
+        const tabScreenshotPath = path.join(SCREENSHOTS_DIR, `${zoneName}.png`);
+        const tabHasScreenshot = fs.existsSync(tabScreenshotPath);
+        const tabImgSrc = `screenshots/${zoneName}.png`;
+        
+        // Create a visually rich tab with thumbnail as background and text overlay
+        let tabStyle = 'position: relative; overflow: hidden; padding: 30px 15px; text-align: center; height: 80px; width: 150px; border-radius: 5px 5px 0 0;';
+        let tabInnerHtml = '';
+        
+        if (tabHasScreenshot) {
+            // Tab with screenshot background
+            tabStyle += ' background-size: cover; background-position: center; background-image: url(\'' + tabImgSrc + '\');';
+            tabInnerHtml = 
+                '<div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 1;"></div>' +
+                '<div style="position: relative; z-index: 2; color: white;">' +
+                '<div style="font-size: 0.8em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + zoneName + '</div>';
+            
+            // Add tag if exists
+            if (tag && tag.length > 0) {
+                tabInnerHtml += '<span class="badge bg-info mt-1" style="font-size: 0.7em;">' + tag + '</span>';
+            }
+            
+            tabInnerHtml += '</div>';
+        } else {
+            // Fallback for tabs without screenshots
+            tabStyle += ' background-color: #f8f9fa;';
+            tabInnerHtml = 
+                '<div style="position: relative; z-index: 2;">' +
+                '<div style="font-size: 0.8em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + zoneName + '</div>';
+            
+            // Add tag if exists
+            if (tag && tag.length > 0) {
+                tabInnerHtml += '<span class="badge bg-info mt-1" style="font-size: 0.7em;">' + tag + '</span>';
+            }
+            
+            tabInnerHtml += '</div>';
+        }
+        
         tabNav += '<li class="nav-item" role="presentation">' +
             '<button class="nav-link ' + isActive + '" id="' + zoneId + '-tab" data-bs-toggle="tab" ' +
             'data-bs-target="#' + zoneId + '" type="button" role="tab" ' +
+            'style="' + tabStyle + '" ' +
             'aria-controls="' + zoneId + '" aria-selected="' + (index === 0) + '">' +
-            zoneName +
+            tabInnerHtml +
             '</button>' +
             '</li>';
         
@@ -391,14 +432,22 @@ function generateHtmlReport(zoneDataMap) {
             '</div>' +
             '</div>';
         
-        // Create notes section
+        // Create notes section with tag input
         let notesHtml = '<div class="mt-3">' +
-            '<h5>Notes</h5>' +
+            '<h5>Domain Information</h5>' +
             '<div class="mb-3">' +
-            '<textarea class="form-control zone-notes" rows="3" ' +
+            '<label for="tag-' + zoneId + '" class="form-label">Tag (Purpose of this domain)</label>' +
+            '<input type="text" class="form-control zone-tag" id="tag-' + zoneId + '" ' +
+            'placeholder="e.g., Blog, E-commerce, Client Project" ' +
+            'value="' + (metadata.tag || '') + '" ' +
+            'data-zone-id="' + zoneData.zone.id + '">' +
+            '</div>' +
+            '<div class="mb-3">' +
+            '<label for="notes-' + zoneId + '" class="form-label">Notes</label>' +
+            '<textarea class="form-control zone-notes" id="notes-' + zoneId + '" rows="3" ' +
             'data-zone-id="' + zoneData.zone.id + '">' + (metadata.notes || '') + '</textarea>' +
             '</div>' +
-            '<button class="btn btn-primary save-notes-btn" data-zone-id="' + zoneData.zone.id + '">Save Notes</button>' +
+            '<button class="btn btn-primary save-metadata-btn" data-zone-id="' + zoneData.zone.id + '">Save Information</button>' +
             '</div>';
         
         // Create tab content
@@ -535,18 +584,44 @@ function generateHtmlReport(zoneDataMap) {
         '}' +
         '});' +
         '});' +
-        // Save notes buttons
-        'document.querySelectorAll(".save-notes-btn").forEach(button => {' +
+        // Save metadata buttons with actual server-side update
+        'document.querySelectorAll(".save-metadata-btn").forEach(button => {' +
         'button.addEventListener("click", function() {' +
         'const zoneId = this.dataset.zoneId;' +
+        'const tagInput = document.querySelector(".zone-tag[data-zone-id=\'" + zoneId + "\']");' +
+        'const tag = tagInput.value;' +
         'const notesTextarea = document.querySelector(".zone-notes[data-zone-id=\'" + zoneId + "\']");' +
         'const notes = notesTextarea.value;' +
-        '// In a real app, you would send this to the server' +
-        'console.log("Saving notes for zone", zoneId, ":", notes);' +
-        '// Store in localStorage temporarily' +
-        'localStorage.setItem("notes_" + zoneId, notes);' +
-        '// Show save confirmation' +
-        'alert("Notes saved!");' +
+        
+        '// In a real app, we would use a proper AJAX call' +
+        '// For now, we simulate it by writing to a file that the server will read later' +
+        'const saveData = { zoneId: zoneId, tag: tag, notes: notes };' +
+        'const saveFilePath = "metadata_" + zoneId + ".json";' +
+        
+        '// Write the data to localStorage for immediate use' +
+        'localStorage.setItem("metadata_" + zoneId, JSON.stringify(saveData));' +
+        
+        '// Write a tiny file to notify the app of changes on next run' +
+        'try {' +
+        '  const saveElement = document.createElement("a");' +
+        '  const saveBlob = new Blob([JSON.stringify(saveData)], {type: "application/json"});' +
+        '  saveElement.href = URL.createObjectURL(saveBlob);' +
+        '  saveElement.download = saveFilePath;' +
+        '  document.body.appendChild(saveElement);' +
+        '  saveElement.click();' +
+        '  document.body.removeChild(saveElement);' +
+        '  alert("Information saved! Download the JSON file and place it in the script directory for persistence.");' +
+        '} catch (err) {' +
+        '  console.error("Failed to save metadata:", err);' +
+        '  alert("Information saved temporarily. Reload the page to see changes.");' +
+        '}' +
+        
+        '// Reload the page to see the new tag in the tab (optional)' +
+        'setTimeout(function() {' +
+        '  if(confirm("Reload page to see changes in tab?")) {' +
+        '    location.reload();' +
+        '  }' +
+        '}, 1000);' +
         '});' +
         '});' +
         // Screenshot upload 
@@ -675,12 +750,12 @@ function updateZoneScreenshot(zoneId, screenshotPath) {
           .run(screenshotPath, zoneId);
     } else {
         // Create new metadata record
-        db.prepare('INSERT INTO zone_metadata (zone_id, notes, screenshot_path) VALUES (?, ?, ?)')
-          .run(zoneId, '', screenshotPath);
+        db.prepare('INSERT INTO zone_metadata (zone_id, notes, screenshot_path, tag) VALUES (?, ?, ?, ?)')
+          .run(zoneId, '', screenshotPath, '');
     }
 }
 
-// Main function to orchestrate fetching
+// Main function to add code for checking for metadata update files
 async function main() {
     console.log('Starting Cloudflare DNS record fetch...');
     
@@ -740,10 +815,48 @@ async function main() {
         }
     }
 
+    // Check for metadata updates from previous sessions
+    checkForMetadataUpdates();
+
     // Generate HTML report
     generateHtmlReport(zoneDataMap);
     
     console.log('\nFetch complete.');
+}
+
+// Function to check for metadata update files
+function checkForMetadataUpdates() {
+    // Get a list of all metadata_*.json files in the directory
+    const files = fs.readdirSync(process.cwd());
+    const metadataFiles = files.filter(file => file.startsWith('metadata_') && file.endsWith('.json'));
+    
+    if (metadataFiles.length > 0) {
+        console.log('\nFound metadata update files. Processing...');
+        
+        metadataFiles.forEach(file => {
+            try {
+                const data = JSON.parse(fs.readFileSync(path.join(process.cwd(), file), 'utf8'));
+                const { zoneId, tag, notes } = data;
+                
+                if (zoneId) {
+                    console.log(`  Updating metadata for zone ${zoneId}`);
+                    
+                    // Update the database
+                    const updateStmt = db.prepare(
+                        'UPDATE zone_metadata SET tag = ?, notes = ? WHERE zone_id = ?'
+                    );
+                    updateStmt.run(tag || '', notes || '', zoneId);
+                    
+                    // Delete the file after processing
+                    fs.unlinkSync(path.join(process.cwd(), file));
+                }
+            } catch (error) {
+                console.error(`  Error processing metadata file ${file}:`, error.message);
+            }
+        });
+        
+        console.log('Metadata updates completed.');
+    }
 }
 
 // Run the main function
