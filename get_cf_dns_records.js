@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import betterSqlite3 from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import puppeteer from 'puppeteer';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -17,7 +18,14 @@ const cloudflareApiBase = 'https://api.cloudflare.com/client/v4';
 const CACHE_EXPIRATION_HOURS = 24; // Cache data for 24 hours
 const DB_PATH = path.join(process.cwd(), 'cloudflare_cache.db');
 const HTML_OUTPUT_PATH = path.join(process.cwd(), 'cloudflare_report.html');
+const SCREENSHOTS_DIR = path.join(process.cwd(), 'screenshots');
 // --- End Configuration ---
+
+// Ensure screenshots directory exists
+if (!fs.existsSync(SCREENSHOTS_DIR)) {
+    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+    console.log(`Created screenshots directory: ${SCREENSHOTS_DIR}`);
+}
 
 // Initialize SQLite database for caching
 const db = initDatabase();
@@ -358,8 +366,17 @@ function generateHtmlReport(zoneDataMap) {
             '<h5>Screenshot</h5>' +
             '<div class="mb-3">';
         
-        if (metadata.screenshot_path) {
-            screenshotHtml += '<img src="' + metadata.screenshot_path + '" alt="' + zoneName + ' screenshot" class="img-fluid rounded shadow-sm border">';
+        // Check for both the database path and the actual file
+        const hasScreenshotInDb = metadata.screenshot_path && metadata.screenshot_path.length > 0;
+        const expectedScreenshotPath = path.join(SCREENSHOTS_DIR, `${zoneName}.png`);
+        const screenshotFileExists = fs.existsSync(expectedScreenshotPath);
+        
+        // Use relative path for HTML display
+        const relativeScreenshotPath = `screenshots/${zoneName}.png`;
+        
+        if (hasScreenshotInDb || screenshotFileExists) {
+            // We have a screenshot - show it
+            screenshotHtml += '<img src="' + relativeScreenshotPath + '" alt="' + zoneName + ' screenshot" class="img-fluid rounded shadow-sm border">';
         } else {
             screenshotHtml += '<div class="text-center p-5 bg-light rounded">' +
                 '<p class="text-muted">No screenshot available</p>' +
@@ -587,15 +604,102 @@ function generateHtmlReport(zoneDataMap) {
     console.log(`\nHTML report generated: ${HTML_OUTPUT_PATH}`);
 }
 
+// Function to take screenshots of domains
+async function takeScreenshots(zones) {
+    console.log('\nTaking screenshots of domains...');
+    
+    // Launch browser
+    const browser = await puppeteer.launch({ 
+        headless: "new", 
+        defaultViewport: { width: 1280, height: 800 } 
+    });
+    
+    try {
+        for (const zone of zones) {
+            const zoneName = zone.name;
+            const screenshotPath = path.join(SCREENSHOTS_DIR, `${zoneName}.png`);
+            
+            // Skip if screenshot already exists and is less than 7 days old
+            if (fs.existsSync(screenshotPath)) {
+                const stats = fs.statSync(screenshotPath);
+                const fileAgeDays = (Date.now() - stats.mtime.getTime()) / (1000 * 60 * 60 * 24);
+                
+                if (fileAgeDays < 7) {
+                    console.log(`  Skipping ${zoneName} - screenshot is less than 7 days old`);
+                    continue;
+                }
+            }
+            
+            try {
+                console.log(`  Taking screenshot of ${zoneName}...`);
+                const page = await browser.newPage();
+                
+                // Set timeout to 30 seconds
+                await page.setDefaultNavigationTimeout(30000);
+                
+                // Navigate to the domain
+                await page.goto(`http://${zoneName}`, { waitUntil: 'networkidle2' });
+                
+                // Take screenshot
+                await page.screenshot({ path: screenshotPath, fullPage: false });
+                
+                console.log(`  Screenshot saved to ${screenshotPath}`);
+                
+                // Close the page
+                await page.close();
+                
+                // Update the database with the screenshot path
+                updateZoneScreenshot(zone.id, screenshotPath);
+                
+            } catch (error) {
+                console.error(`  Error taking screenshot of ${zoneName}:`, error.message);
+                // Continue with the next domain
+            }
+        }
+    } finally {
+        // Close the browser
+        await browser.close();
+    }
+    
+    console.log('Screenshot capture complete!');
+}
+
+// Function to update the zone's screenshot path in the database
+function updateZoneScreenshot(zoneId, screenshotPath) {
+    // Check if metadata exists for this zone
+    const metadata = db.prepare('SELECT * FROM zone_metadata WHERE zone_id = ?').get(zoneId);
+    
+    if (metadata) {
+        // Update existing metadata
+        db.prepare('UPDATE zone_metadata SET screenshot_path = ? WHERE zone_id = ?')
+          .run(screenshotPath, zoneId);
+    } else {
+        // Create new metadata record
+        db.prepare('INSERT INTO zone_metadata (zone_id, notes, screenshot_path) VALUES (?, ?, ?)')
+          .run(zoneId, '', screenshotPath);
+    }
+}
+
 // Main function to orchestrate fetching
 async function main() {
     console.log('Starting Cloudflare DNS record fetch...');
+    
+    // Get zones directly for screenshot capture
+    const zones = await getZones();
+    
+    if (!zones || zones.length === 0) {
+        console.log('No zones found or error fetching zones. Exiting.');
+        return;
+    }
+    
+    // Take screenshots of zones
+    await takeScreenshots(zones);
     
     // Get all zone data with enrichments
     const zoneDataMap = await getEnrichedZoneData();
     
     if (!zoneDataMap || Object.keys(zoneDataMap).length === 0) {
-        console.log('No zones found or error fetching zones. Exiting.');
+        console.log('No zone data found or error fetching zone data. Exiting.');
         return;
     }
 
