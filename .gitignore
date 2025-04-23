@@ -15,3 +15,12 @@
 
 *.html
 *.db
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+
+**/screenshots
+**/screenshots/**
