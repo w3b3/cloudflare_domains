@@ -1,23 +1,16 @@
 {
-  "name": "cloudflare_domains",
-  "type": "module",
+  "name": "cloudflare-domains-monorepo",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Monorepo for Cloudflare domains management",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "api:install": "cd api && npm install",
+    "ui:install": "cd ui && npm install",
+    "install:all": "npm install && npm run api:install && npm run ui:install",
+    "api:dev": "cd api && npm run dev",
+    "ui:dev": "cd ui && npm run dev",
+    "dev": "concurrently \"npm run api:dev\" \"npm run ui:dev\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "axios": "^1.8.4",
-    "better-sqlite3": "^11.9.1",
-    "bootstrap": "^5.3.0",
-    "chart.js": "^4.4.9",
-    "dotenv": "^16.5.0",
-    "fs-extra": "^11.3.0",
-    "puppeteer": "^24.7.1",
-    "sqlite3": "^5.1.7"
+    "concurrently": "^8.2.2"
   }
 }

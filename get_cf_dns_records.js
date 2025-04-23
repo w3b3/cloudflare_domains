@@ -6,6 +6,9 @@ import betterSqlite3 from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import puppeteer from 'puppeteer';
+import express from 'express';
+import cors from 'cors';
+import bodyParser from 'body-parser';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -19,6 +22,7 @@ const CACHE_EXPIRATION_HOURS = 24; // Cache data for 24 hours
 const DB_PATH = path.join(process.cwd(), 'cloudflare_cache.db');
 const HTML_OUTPUT_PATH = path.join(process.cwd(), 'cloudflare_report.html');
 const SCREENSHOTS_DIR = path.join(process.cwd(), 'screenshots');
+const API_PORT = 3333; // Port for the metadata API server
 // --- End Configuration ---
 
 // Ensure screenshots directory exists
@@ -584,44 +588,69 @@ function generateHtmlReport(zoneDataMap) {
         '}' +
         '});' +
         '});' +
-        // Save metadata buttons with actual server-side update
+        // Save metadata buttons with API call
         'document.querySelectorAll(".save-metadata-btn").forEach(button => {' +
         'button.addEventListener("click", function() {' +
-        'const zoneId = this.dataset.zoneId;' +
-        'const tagInput = document.querySelector(".zone-tag[data-zone-id=\'" + zoneId + "\']");' +
-        'const tag = tagInput.value;' +
-        'const notesTextarea = document.querySelector(".zone-notes[data-zone-id=\'" + zoneId + "\']");' +
-        'const notes = notesTextarea.value;' +
-        
-        '// In a real app, we would use a proper AJAX call' +
-        '// For now, we simulate it by writing to a file that the server will read later' +
-        'const saveData = { zoneId: zoneId, tag: tag, notes: notes };' +
-        'const saveFilePath = "metadata_" + zoneId + ".json";' +
-        
-        '// Write the data to localStorage for immediate use' +
-        'localStorage.setItem("metadata_" + zoneId, JSON.stringify(saveData));' +
-        
-        '// Write a tiny file to notify the app of changes on next run' +
-        'try {' +
-        '  const saveElement = document.createElement("a");' +
-        '  const saveBlob = new Blob([JSON.stringify(saveData)], {type: "application/json"});' +
-        '  saveElement.href = URL.createObjectURL(saveBlob);' +
-        '  saveElement.download = saveFilePath;' +
-        '  document.body.appendChild(saveElement);' +
-        '  saveElement.click();' +
-        '  document.body.removeChild(saveElement);' +
-        '  alert("Information saved! Download the JSON file and place it in the script directory for persistence.");' +
-        '} catch (err) {' +
-        '  console.error("Failed to save metadata:", err);' +
-        '  alert("Information saved temporarily. Reload the page to see changes.");' +
-        '}' +
-        
-        '// Reload the page to see the new tag in the tab (optional)' +
-        'setTimeout(function() {' +
-        '  if(confirm("Reload page to see changes in tab?")) {' +
-        '    location.reload();' +
-        '  }' +
-        '}, 1000);' +
+        '  const zoneId = this.dataset.zoneId;' +
+        '  const tagInput = document.querySelector(".zone-tag[data-zone-id=\'" + zoneId + "\']");' +
+        '  const tag = tagInput.value;' +
+        '  const notesTextarea = document.querySelector(".zone-notes[data-zone-id=\'" + zoneId + "\']");' +
+        '  const notes = notesTextarea.value;' +
+        '  const saveBtn = this;' +
+        '  ' +
+        '  // Disable button and show loading state' +
+        '  saveBtn.disabled = true;' +
+        '  saveBtn.innerHTML = \'<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...\';' +
+        '  ' +
+        '  // Call the API to update metadata' +
+        '  fetch("/api/metadata/" + zoneId, {' +
+        '    method: "POST",' +
+        '    headers: {' +
+        '      "Content-Type": "application/json"' +
+        '    },' +
+        '    body: JSON.stringify({ tag, notes })' +
+        '  })' +
+        '  .then(response => response.json())' +
+        '  .then(data => {' +
+        '    if (data.success) {' +
+        '      // Update the tab UI with the new tag' +
+        '      const tab = document.getElementById(zoneId + "-tab");' +
+        '      const tagBadge = tab.querySelector(".badge");' +
+        '      if (tag && tag.length > 0) {' +
+        '        if (tagBadge) {' +
+        '          // Update existing badge' +
+        '          tagBadge.textContent = tag;' +
+        '        } else {' +
+        '          // Create new badge if doesn\'t exist' +
+        '          const tagHtml = document.createElement("span");' +
+        '          tagHtml.className = "badge bg-info mt-1";' +
+        '          tagHtml.style.fontSize = "0.7em";' +
+        '          tagHtml.textContent = tag;' +
+        '          const textContainer = tab.querySelector("[style*=\'z-index: 2\']");' +
+        '          if (textContainer) {' +
+        '            textContainer.appendChild(tagHtml);' +
+        '          }' +
+        '        }' +
+        '      } else if (tagBadge) {' +
+        '        // Remove badge if tag is empty' +
+        '        tagBadge.remove();' +
+        '      }' +
+        '      ' +
+        '      // Show success message' +
+        '      alert("Information saved successfully!");' +
+        '    } else {' +
+        '      alert("Error saving information: " + (data.error || "Unknown error"));' +
+        '    }' +
+        '  })' +
+        '  .catch(error => {' +
+        '    console.error("Error saving metadata:", error);' +
+        '    alert("Error saving information. See console for details.");' +
+        '  })' +
+        '  .finally(() => {' +
+        '    // Re-enable button and restore text' +
+        '    saveBtn.disabled = false;' +
+        '    saveBtn.textContent = "Save Information";' +
+        '  });' +
         '});' +
         '});' +
         // Screenshot upload 
@@ -755,7 +784,7 @@ function updateZoneScreenshot(zoneId, screenshotPath) {
     }
 }
 
-// Main function to add code for checking for metadata update files
+// Main function to orchestrate fetching and start the server
 async function main() {
     console.log('Starting Cloudflare DNS record fetch...');
     
@@ -777,6 +806,9 @@ async function main() {
         console.log('No zone data found or error fetching zone data. Exiting.');
         return;
     }
+
+    // Check for metadata updates from previous sessions
+    checkForMetadataUpdates();
 
     // Display the summary grouped by zone
     console.log('\n\n--- Summary (Grouped by Zone) ---');
@@ -815,13 +847,18 @@ async function main() {
         }
     }
 
-    // Check for metadata updates from previous sessions
-    checkForMetadataUpdates();
-
     // Generate HTML report
     generateHtmlReport(zoneDataMap);
     
     console.log('\nFetch complete.');
+    console.log(`\nHTML report generated: ${HTML_OUTPUT_PATH}`);
+    
+    // Start the API server
+    console.log('\nStarting API server for metadata management...');
+    startApiServer();
+    
+    console.log('\nKeep this process running to use the API functionality.');
+    console.log('Press Ctrl+C to stop the server when done.');
 }
 
 // Function to check for metadata update files
@@ -857,6 +894,63 @@ function checkForMetadataUpdates() {
         
         console.log('Metadata updates completed.');
     }
+}
+
+// Add API server functionality
+let apiServer;
+
+// Function to start the API server for metadata updates
+function startApiServer() {
+    const app = express();
+    
+    // Enable CORS and JSON body parsing
+    app.use(cors());
+    app.use(bodyParser.json());
+    
+    // Serve the screenshots directory
+    app.use('/screenshots', express.static(SCREENSHOTS_DIR));
+    
+    // API endpoint to get metadata for a zone
+    app.get('/api/metadata/:zoneId', (req, res) => {
+        try {
+            const { zoneId } = req.params;
+            const metadata = getZoneMetadata(zoneId);
+            res.json({ success: true, data: metadata });
+        } catch (error) {
+            console.error('API error getting metadata:', error);
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+    
+    // API endpoint to update metadata for a zone
+    app.post('/api/metadata/:zoneId', (req, res) => {
+        try {
+            const { zoneId } = req.params;
+            const { tag, notes } = req.body;
+            
+            // Update the database
+            const updateStmt = db.prepare(
+                'UPDATE zone_metadata SET tag = ?, notes = ? WHERE zone_id = ?'
+            );
+            updateStmt.run(tag || '', notes || '', zoneId);
+            
+            res.json({ success: true, message: 'Metadata updated successfully' });
+        } catch (error) {
+            console.error('API error updating metadata:', error);
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+    
+    // Start the server
+    apiServer = app.listen(API_PORT, () => {
+        console.log(`\nMetadata API server running at http://localhost:${API_PORT}`);
+        console.log(`Report URL: http://localhost:${API_PORT}/cloudflare_report.html`);
+    });
+    
+    // Also serve the HTML report
+    app.use(express.static(process.cwd()));
+    
+    return apiServer;
 }
 
 // Run the main function
