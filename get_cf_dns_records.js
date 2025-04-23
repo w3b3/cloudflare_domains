@@ -1,12 +1,14 @@
 // get_cf_dns_records.js
 import axios from 'axios';
 import process from 'process';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
 
 // --- Configuration ---
-// Store your API Token securely as an environment variable.
-// Example: export CLOUDFLARE_API_TOKEN='YOUR_API_TOKEN_HERE' (Linux/macOS)
-//       or set CLOUDFLARE_API_TOKEN=YOUR_API_TOKEN_HERE (Windows CMD)
-//       or $env:CLOUDFLARE_API_TOKEN='YOUR_API_TOKEN_HERE' (Windows PowerShell)
+// Store your API Token in the .env file as:
+// CLOUDFLARE_API_TOKEN=your_api_token_here
 const apiToken = process.env.CLOUDFLARE_API_TOKEN;
 const cloudflareApiBase = 'https://api.cloudflare.com/client/v4';
 // --- End Configuration ---
