@@ -12,3 +12,6 @@
 **/coverage
 **/logs
 **/temp
+
+*.html
+*.db
