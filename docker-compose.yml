@@ -1,8 +1,9 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15
+  db:
+    image: postgres:15-alpine
+    container_name: cloudflare-domains-postgres
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
@@ -10,15 +11,17 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5400:5432"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
+      # start_period: 5s
 
   api:
+    container_name: cloudflare-domains-api
     build:
       context: ./api
       dockerfile: Dockerfile
@@ -28,11 +31,11 @@ services:
         BUILDKIT_INLINE_CACHE: 1
     image: cloudflare_domains-api:latest
     ports:
-      - "3333:3333"
+      - "5401:3333"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
-      DB_HOST: postgres
+      DB_HOST: db
       DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
@@ -41,17 +44,18 @@ services:
     volumes:
       - ./api/screenshots:/app/screenshots
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3333/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   ui:
+    container_name: cloudflare-domains-ui
     build:
       context: ./ui
       dockerfile: Dockerfile
@@ -61,7 +65,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
     image: cloudflare_domains-ui:latest
     ports:
-      - "3000:3000"
+      - "5402:3000"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
     depends_on:
@@ -70,10 +74,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
 volumes:
   postgres_data:
