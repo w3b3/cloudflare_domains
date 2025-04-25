@@ -19,7 +19,7 @@ dotenv.config();
 const apiToken = process.env.CLOUDFLARE_API_TOKEN;
 const cloudflareApiBase = 'https://api.cloudflare.com/client/v4';
 const CACHE_EXPIRATION_HOURS = 24; // Cache data for 24 hours
-const DB_PATH = path.join(process.cwd(), 'cloudflare_cache.db');
+const DB_PATH = path.join(process.cwd(), 'data/cloudflare_cache.db');
 const HTML_OUTPUT_PATH = path.join(process.cwd(), 'cloudflare_report.html');
 const SCREENSHOTS_DIR = path.join(process.cwd(), 'screenshots');
 const API_PORT = 3333; // Port for the metadata API server
@@ -122,7 +122,7 @@ async function getZones() {
         console.log('Cache miss or expired. Fetching zones from Cloudflare...');
         const response = await cfApi.get('/zones', {
             params: {
-                per_page: 50 // Fetch up to 50 zones per request
+                 per_page: 50 // Fetch up to 50 zones per request
             }
         });
         
@@ -174,14 +174,14 @@ async function getDnsRecords(zoneId, zoneName) {
                 records = JSON.parse(cachedRecords.data);
             } else {
                 console.log(`   Cache miss or expired. Fetching ${type} records from Cloudflare...`);
-                const response = await cfApi.get(`/zones/${zoneId}/dns_records`, {
-                    params: {
-                        type: type,
-                        per_page: 100 // Fetch up to 100 records per request
-                    },
-                });
+            const response = await cfApi.get(`/zones/${zoneId}/dns_records`, {
+                params: {
+                    type: type,
+                    per_page: 100 // Fetch up to 100 records per request
+                },
+            });
 
-                if (response.data.success) {
+            if (response.data.success) {
                     records = response.data.result;
                     console.log(`   Found ${records.length} ${type} records.`);
                     
@@ -195,14 +195,14 @@ async function getDnsRecords(zoneId, zoneName) {
             }
             
             records.forEach(record => {
-                foundRecords.push({
-                    zoneName: zoneName,
-                    type: record.type,
+                    foundRecords.push({
+                        zoneName: zoneName,
+                        type: record.type,
                     name: record.name,
-                    content: record.content,
-                    proxied: record.proxied,
+                        content: record.content,
+                        proxied: record.proxied,
+                    });
                 });
-            });
         } catch (error) {
             console.error(`   Error processing ${type} records in zone ${zoneName}:`, error.response ? error.response.data : error.message);
         }
@@ -790,12 +790,12 @@ async function main() {
     
     // Get zones directly for screenshot capture
     const zones = await getZones();
-    
+
     if (!zones || zones.length === 0) {
         console.log('No zones found or error fetching zones. Exiting.');
         return;
     }
-    
+
     // Take screenshots of zones
     await takeScreenshots(zones);
     
@@ -849,7 +849,7 @@ async function main() {
 
     // Generate HTML report
     generateHtmlReport(zoneDataMap);
-    
+
     console.log('\nFetch complete.');
     console.log(`\nHTML report generated: ${HTML_OUTPUT_PATH}`);
     
