@@ -140,14 +140,14 @@ run_remote "
     # Wait a bit more for everything to stabilize
     sleep 15
     
-    # Test API health
+    # Test API health (internal - use HTTP for localhost)
     curl -f http://localhost:5401/api/health || echo 'API health check failed'
     
-    # Test UI
+    # Test UI (internal - use HTTP for localhost)
     curl -f http://localhost:5402/ || echo 'UI health check failed'
     
-    # Test through nginx
-    curl -f http://${DOMAIN}/health || echo 'Nginx health check failed'
+    # Test through nginx (external - use HTTPS)
+    curl -f https://${DOMAIN}/health || echo 'Nginx health check failed (HTTPS)'
 "
 
 echo "🎉 Deployment completed successfully!"

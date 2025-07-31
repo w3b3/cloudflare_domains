@@ -9,6 +9,10 @@ import axios from 'axios';
 import pg from 'pg'; // Use pg instead of better-sqlite3
 import dotenv from 'dotenv';
 import puppeteer from 'puppeteer';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import validator from 'validator';
+import admin from 'firebase-admin';
 
 const { Pool } = pg;
 
@@ -22,6 +26,20 @@ const PORT = process.env.PORT || 3333;
 const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 const cloudflareApiBase = 'https://api.cloudflare.com/client/v4';
 const CACHE_EXPIRATION_HOURS = 24;
+
+// Firebase Admin SDK initialization
+try {
+    // Initialize Firebase Admin with project ID (no service account key needed for Firebase Auth verification)
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            projectId: process.env.VITE_FIREBASE_PROJECT_ID || 'cloudflare-domains-manager'
+        });
+    }
+    console.log('Firebase Admin initialized successfully');
+} catch (error) {
+    console.error('Firebase Admin initialization failed:', error);
+    console.log('Note: Firebase Admin is required for API authentication');
+}
 
 // Screenshots directory setup
 const SCREENSHOTS_DIR = path.join(__dirname, 'screenshots');
@@ -116,13 +134,151 @@ const cfApi = axios.create({
     },
 });
 
+// Input validation functions
+const validateZoneName = (zoneName) => {
+    if (!zoneName || typeof zoneName !== 'string') {
+        return { valid: false, error: 'Zone name is required and must be a string' };
+    }
+    
+    // Basic domain name validation
+    if (!validator.isFQDN(zoneName, { require_tld: true, allow_underscores: false })) {
+        return { valid: false, error: 'Invalid zone name format' };
+    }
+    
+    if (zoneName.length > 253) {
+        return { valid: false, error: 'Zone name too long' };
+    }
+    
+    return { valid: true };
+};
+
+const validateTaskDescription = (description) => {
+    if (!description || typeof description !== 'string') {
+        return { valid: false, error: 'Task description is required and must be a string' };
+    }
+    
+    if (description.length > 1000) {
+        return { valid: false, error: 'Task description must be less than 1000 characters' };
+    }
+    
+    // Basic XSS prevention - strip HTML tags
+    const sanitized = validator.escape(description.trim());
+    return { valid: true, sanitized };
+};
+
+const validateMetadata = (tag, notes) => {
+    const errors = [];
+    let sanitizedTag = '';
+    let sanitizedNotes = '';
+    
+    if (tag !== undefined) {
+        if (typeof tag !== 'string') {
+            errors.push('Tag must be a string');
+        } else if (tag.length > 100) {
+            errors.push('Tag must be less than 100 characters');
+        } else {
+            sanitizedTag = validator.escape(tag.trim());
+        }
+    }
+    
+    if (notes !== undefined) {
+        if (typeof notes !== 'string') {
+            errors.push('Notes must be a string');
+        } else if (notes.length > 5000) {
+            errors.push('Notes must be less than 5000 characters');
+        } else {
+            sanitizedNotes = validator.escape(notes.trim());
+        }
+    }
+    
+    return {
+        valid: errors.length === 0,
+        errors,
+        sanitized: { tag: sanitizedTag, notes: sanitizedNotes }
+    };
+};
+
+// Authentication middleware
+const verifyFirebaseToken = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'Unauthorized: No valid authentication token provided' 
+            });
+        }
+
+        const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        
+        // Add user info to request
+        req.user = {
+            uid: decodedToken.uid,
+            email: decodedToken.email,
+            emailVerified: decodedToken.email_verified
+        };
+        
+        next();
+    } catch (error) {
+        console.error('Authentication error:', error.message);
+        return res.status(401).json({ 
+            success: false, 
+            error: 'Unauthorized: Invalid authentication token' 
+        });
+    }
+};
+
+// Rate limiting
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: {
+        success: false,
+        error: 'Too many requests from this IP, please try again after 15 minutes.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
 // Express app setup
 const app = express();
-app.use(cors());
-app.use(bodyParser.json());
-app.use('/screenshots', express.static(SCREENSHOTS_DIR)); // Serve screenshots statically
 
-// Health Check Endpoint
+// Security headers
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "https:"],
+        },
+    },
+}));
+
+// Rate limiting
+app.use('/api/', apiLimiter);
+
+// CORS configuration - restrict to specific origins
+app.use(cors({
+    origin: [
+        'https://cloudflare.w-b.dev',
+        'http://localhost:3000',
+        'http://localhost:5402'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Body parsing with size limits
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Static file serving with authentication for screenshots
+app.use('/screenshots', verifyFirebaseToken, express.static(SCREENSHOTS_DIR));
+
+// Health Check Endpoint (no authentication required)
 app.get('/api/health', async (req, res) => {
     try {
         const client = await pool.connect();
@@ -426,8 +582,8 @@ async function updateZoneScreenshot(zoneName, screenshotPath) {
 // --- API Routes ---
 // (Refactored to use async/await and pool.query)
 
-// GET /api/zones
-app.get('/api/zones', async (req, res) => {
+// GET /api/zones (protected)
+app.get('/api/zones', verifyFirebaseToken, async (req, res) => {
     try {
         const zones = await getZones(); // Fetches from cache or API
         res.json({ success: true, data: zones });
@@ -437,8 +593,8 @@ app.get('/api/zones', async (req, res) => {
     }
 });
 
-// GET /api/zones/:zoneName/records
-app.get('/api/zones/:zoneName/records', async (req, res) => {
+// GET /api/zones/:zoneName/records (protected)
+app.get('/api/zones/:zoneName/records', verifyFirebaseToken, async (req, res) => {
     const { zoneName } = req.params;
     try {
         const zoneResult = await pool.query('SELECT id FROM zones WHERE name = $1', [zoneName]);
@@ -454,8 +610,8 @@ app.get('/api/zones/:zoneName/records', async (req, res) => {
     }
 });
 
-// GET /api/zones/:zoneName/metadata
-app.get('/api/zones/:zoneName/metadata', async (req, res) => {
+// GET /api/zones/:zoneName/metadata (protected)
+app.get('/api/zones/:zoneName/metadata', verifyFirebaseToken, async (req, res) => {
     const { zoneName } = req.params;
     try {
         const zoneResult = await pool.query('SELECT id FROM zones WHERE name = $1', [zoneName]);
@@ -471,10 +627,25 @@ app.get('/api/zones/:zoneName/metadata', async (req, res) => {
     }
 });
 
-// POST /api/zones/:zoneName/metadata
-app.post('/api/zones/:zoneName/metadata', async (req, res) => {
+// POST /api/zones/:zoneName/metadata (protected)
+app.post('/api/zones/:zoneName/metadata', verifyFirebaseToken, async (req, res) => {
     const { zoneName } = req.params;
     const { tag, notes } = req.body;
+    
+    // Validate zone name
+    const zoneValidation = validateZoneName(zoneName);
+    if (!zoneValidation.valid) {
+        return res.status(400).json({ success: false, error: zoneValidation.error });
+    }
+    
+    // Validate and sanitize metadata
+    const metadataValidation = validateMetadata(tag, notes);
+    if (!metadataValidation.valid) {
+        return res.status(400).json({ success: false, error: metadataValidation.errors.join(', ') });
+    }
+    
+    const { tag: sanitizedTag, notes: sanitizedNotes } = metadataValidation.sanitized;
+    
     try {
         const zoneResult = await pool.query('SELECT id FROM zones WHERE name = $1', [zoneName]);
         if (zoneResult.rows.length === 0) {
@@ -490,7 +661,7 @@ app.post('/api/zones/:zoneName/metadata', async (req, res) => {
                 tag = EXCLUDED.tag,
                 notes = EXCLUDED.notes
         `;
-        await pool.query(upsertQuery, [zoneId, tag || '', notes || '']);
+        await pool.query(upsertQuery, [zoneId, sanitizedTag || '', sanitizedNotes || '']);
 
         res.json({ success: true, message: 'Metadata updated successfully' });
     } catch (error) {
@@ -499,8 +670,8 @@ app.post('/api/zones/:zoneName/metadata', async (req, res) => {
     }
 });
 
-// GET /api/zones/:zoneName/tasks
-app.get('/api/zones/:zoneName/tasks', async (req, res) => {
+// GET /api/zones/:zoneName/tasks (protected)
+app.get('/api/zones/:zoneName/tasks', verifyFirebaseToken, async (req, res) => {
     const { zoneName } = req.params;
     try {
         const zoneResult = await pool.query('SELECT id FROM zones WHERE name = $1', [zoneName]);
@@ -516,13 +687,25 @@ app.get('/api/zones/:zoneName/tasks', async (req, res) => {
     }
 });
 
-// POST /api/zones/:zoneName/tasks
-app.post('/api/zones/:zoneName/tasks', async (req, res) => {
+// POST /api/zones/:zoneName/tasks (protected)
+app.post('/api/zones/:zoneName/tasks', verifyFirebaseToken, async (req, res) => {
     const { zoneName } = req.params;
     const { task_description } = req.body;
-    if (!task_description) {
-        return res.status(400).json({ success: false, error: 'Task description is required' });
+    
+    // Validate zone name
+    const zoneValidation = validateZoneName(zoneName);
+    if (!zoneValidation.valid) {
+        return res.status(400).json({ success: false, error: zoneValidation.error });
     }
+    
+    // Validate and sanitize task description
+    const taskValidation = validateTaskDescription(task_description);
+    if (!taskValidation.valid) {
+        return res.status(400).json({ success: false, error: taskValidation.error });
+    }
+    
+    const sanitizedDescription = taskValidation.sanitized;
+    
     try {
         const zoneResult = await pool.query('SELECT id FROM zones WHERE name = $1', [zoneName]);
         if (zoneResult.rows.length === 0) {
@@ -536,7 +719,7 @@ app.post('/api/zones/:zoneName/tasks', async (req, res) => {
             RETURNING id, created_at
         `;
         // Use current time for created_at
-        const result = await pool.query(insertQuery, [zoneId, task_description, false, new Date()]);
+        const result = await pool.query(insertQuery, [zoneId, sanitizedDescription, false, new Date()]);
 
         res.status(201).json({
             success: true,
@@ -544,7 +727,7 @@ app.post('/api/zones/:zoneName/tasks', async (req, res) => {
             data: {
                 id: result.rows[0].id,
                 zone_id: zoneId,
-                task_description,
+                task_description: sanitizedDescription,
                 is_completed: false,
                 created_at: result.rows[0].created_at // Return timestamp from DB
             }
@@ -555,8 +738,8 @@ app.post('/api/zones/:zoneName/tasks', async (req, res) => {
     }
 });
 
-// PUT /api/zones/:zoneName/tasks/:taskId
-app.put('/api/zones/:zoneName/tasks/:taskId', async (req, res) => {
+// PUT /api/zones/:zoneName/tasks/:taskId (protected)
+app.put('/api/zones/:zoneName/tasks/:taskId', verifyFirebaseToken, async (req, res) => {
     const { zoneName, taskId } = req.params;
     const { is_completed } = req.body; // Expect boolean
     if (is_completed === undefined) {
@@ -590,8 +773,8 @@ app.put('/api/zones/:zoneName/tasks/:taskId', async (req, res) => {
     }
 });
 
-// DELETE /api/zones/:zoneName/tasks/:taskId
-app.delete('/api/zones/:zoneName/tasks/:taskId', async (req, res) => {
+// DELETE /api/zones/:zoneName/tasks/:taskId (protected)
+app.delete('/api/zones/:zoneName/tasks/:taskId', verifyFirebaseToken, async (req, res) => {
     const { zoneName, taskId } = req.params;
     try {
         const zoneResult = await pool.query('SELECT id FROM zones WHERE name = $1', [zoneName]);
@@ -614,8 +797,8 @@ app.delete('/api/zones/:zoneName/tasks/:taskId', async (req, res) => {
     }
 });
 
-// POST /api/zones/:zoneName/screenshot
-app.post('/api/zones/:zoneName/screenshot', async (req, res) => {
+// POST /api/zones/:zoneName/screenshot (protected)
+app.post('/api/zones/:zoneName/screenshot', verifyFirebaseToken, async (req, res) => {
     const { zoneName } = req.params;
     try {
         // Check if zone exists before attempting screenshot
@@ -632,8 +815,8 @@ app.post('/api/zones/:zoneName/screenshot', async (req, res) => {
     }
 });
 
-// GET /api/all
-app.get('/api/all', async (req, res) => {
+// GET /api/all (protected)
+app.get('/api/all', verifyFirebaseToken, async (req, res) => {
     try {
         const zoneData = await getEnrichedZoneData();
         res.json({ success: true, data: zoneData });
